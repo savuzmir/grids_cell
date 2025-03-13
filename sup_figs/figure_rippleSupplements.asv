@@ -1,0 +1,191 @@
+function out = figure_rippleSupplements(respMat)
+
+% cd(go into data folder) 
+rel_files = {'sample_lfp_chans', 'auxStruct', 'AuxiliaryCells', 'allUnits', 'auxLFP', 'sample_lfp_chans', 'channel_info', 'ripple_aligned_fr'};
+for fl = 1:length(rel_files)
+    load(rel_files{fl});
+end
+
+
+% load resp ripples
+resp_orig = load('F:\UCL\OneDrive - University College London\Sebastijan\KennerleyLab\Figures\grids_working\swr\overallRipples.mat'); resp_orig = resp_orig.overallRipples;
+resp = load('C:\Users\sebas\My Drive\Work\KennerleyLab\Code\Infogathering\cell_paper_revision\share_online\data\overallRipples_cleaned.mat'); resp = resp.cleanedRipples;
+load('C:\Users\sebas\My Drive\Work\KennerleyLab\Code\Infogathering\cell_paper_revision\share_online\data\temporal_firing_supp.mat');
+
+load('C:\Users\sebas\My Drive\Work\KennerleyLab\Code\Infogathering\cell_paper_revision\share_online\data\temporal_firing_supp.mat');
+
+curr = figure(7)
+
+chan = 233;
+foo  = preprocessLFP(respMat(chan).ch, 0, auxStruct.rippleBounds, 1000); 
+foo2 = preprocessLFP(respMat(chan).ch, 0, widebandBounds, 1000); 
+
+currChan = zeros(size(resp_orig(chan).trialRipplesHz));
+currChanRipple = resp_orig(chan).trialRipples; currChanRipple = currChanRipple(~isnan(currChanRipple(:, 1)), :);
+currChanRipple = currChanRipple(currChanRipple(:, 1)~=0, :);
+currChanRipple = currChanRipple(currChanRipple(:, 4) > 2000, :);
+trials = currChanRipple(:, 1)';
+currChanRipple = currChanRipple(:, 5:end);
+currChanMorlet                    = preprocessLFP(respMat(chan).ch, 1, widebandBounds, 1000);
+frequencies                       = currChanMorlet.frequencies;
+currChanMorlet                    = currChanMorlet.lfpMagnitude;
+
+trIndx = find(trials == 156);
+SNR           = nan(200, length(frequencies), length(trials));
+rippleMaxFreq = nan(length(trials), 1);
+jj = 1;
+pureRipples = nan(300, 301);
+relTrials   = nan(300, 1);
+origTrials  = nan(size(currChan, 1), 1);
+togglePlotting = 1;
+
+tr = 156;
+tmpSNR = []; projections = [];
+
+trCurr = currChanRipple(trIndx, (~isnan(currChanRipple(trIndx, :))));
+
+trCurrOrig = trCurr; trCurrOrig = trCurrOrig(trCurrOrig > 0);
+ripplePower = squeeze(currChanMorlet(tr, trCurrOrig, :));
+[a,b]=nnmf(ripplePower, nClusters, 'replicates', 10); % b is factor loading
+denom = sum(ripplePower.^2);
+for k = 1:nClusters
+    projections(:, :, k) = a(:, k)*b(k, :);
+end
+numer = squeeze(sum((projections - ripplePower).^2));
+for k = 1:nClusters
+    tmpSNR(:, k) = denom./numer(:, k)';
+end
+
+factor = max(tmpSNR); [mxFactor, mxId] = max(factor);
+bestFactor = tmpSNR(:, mxId);
+
+subplot(3, 5, 4)
+args = {1:size(ripplePower, 1), frequencies, ripplePower'};
+surf(args{:},'edgecolor','none'); axis square
+view(0,90); colormap viridis
+axis tight;
+figElements(curr, 'Original Power Spectrum', '', 'Frequency', [], [], [], {}, [], {}, 14, 1, []);
+
+subplot(3, 5, 3)
+plot(1:200, repmat(5, [200, 1]), ':k');
+plot(frequencies, tmpSNR, 'linewidth', 3); box off
+legend('Cluster 1', 'Cluster 2', 'Cluster 3'); hold on; 
+figElements(curr, '', 'Frequencies', 'Signal to Noise ratio [a.u.]', [], [], [], {}, [], {}, 14, [], []);
+
+subplot(3, 5, 5)
+multProj = a(:, mxId)*b(mxId, :);
+
+args = {1:size(ripplePower, 1), frequencies, multProj'};
+surf(args{:},'edgecolor','none'); axis square
+view(0,90); colormap viridis
+axis tight;
+figElements(curr, 'Reconstructed Power Spectrum', '', 'Frequency', [], [], [], {}, [], {}, 14, 1, []);
+
+subplot(3, 5, 1)
+plot(foo.lfp(tr, :)', 'k'); box off; hold on
+plot(trCurrOrig, foo.lfp(tr, trCurrOrig)', 'r'); box off
+figElements(curr, '', '', '', ...
+    [1 2500], [-0.08, 0.08], [], {}, [], {}, 14, 1, []);
+set(gca, 'visible', 'off')
+subplot(3, 5, 2)
+plot(foo2.lfp(tr, :), 'k'); box off; hold on
+plot(trCurrOrig, foo2.lfp(tr, trCurrOrig)', 'r'); box off
+figElements(curr, '', '', '', ...
+    [1 2500], [-0.1, 0.1], [], {}, [], {}, 14, 1, []);
+set(gca, 'visible', 'off')
+
+
+%% generate single channel samples from 1 session
+
+% sample 
+rel_bounds = [1, 250];
+
+sample_vmpfc_channels  = [199, 198, 200, 197, 196]; 
+sample_acc_channels    = [192, 195];
+sample_ofc_channels    = [193, 194];
+
+all_sample = [sample_vmpfc_channels, sample_ofc_channels, sample_acc_channels];
+
+sample_case = 99;
+filtered_out = [];
+indx = 1;
+for i = all_sample
+    tmp = preprocessLFP(respMat(i).ch, 0, rel_bounds, auxStruct.Fs);
+    filtered_out(indx, :) = tmp.lfp(sample_case, 200:end);
+    indx = indx + 1;
+end
+
+curr = figure(7)
+for i = 1:9
+    subplot(9, 1, i)
+    plot(filtered_out(i, :), 'k'); hold on
+    set(gca, 'visible', 'off')
+end
+
+%% vmpfc across all channels 
+
+vmpfcAverage = [];
+vmpfcIndx = 1;
+vmpfc_channels = find(auxStruct.brain_region_channels == 5);
+for i = vmpfc_channels
+    currChan = resp(i).trialRipplesHzPure;
+    currChan = currChan(:, 2:end);
+    vmpfcAverage(vmpfcIndx, :) = nanmean(currChan);
+    vmpfcIndx = vmpfcIndx + 1;
+end
+
+curr = figure(6)
+subplot(3, 4, 5)
+[~, idx] = sort(vmpfcAverage(:, 800));
+imagesc(vmpfcAverage(idx , 1:1600)*100)
+colormap viridis
+caxis([0, 10]); axis square
+h = colorbar;
+ylabel(h, 'Probability [%]')
+
+figElements(curr, '', '', 'VMPFC Channels', ...
+            [], [], [400, 800, 1200], {'-400', 'Choice ON', '400'}, [], {}, 24, [], []);
+
+%% plot firing rate information
+
+% now join them together
+allPeak             = [];
+allPeakBaseline     = [];
+allPeakControl = [];
+
+for i = 1:auxStruct.num_vmpfc_cells
+
+    allPeak            = [allPeak; nanmean(data_file(i).container)];
+    allPeakControl     = [allPeakControl; nanmean(data_file(i).container_NR)];
+    allPeakBaseline    = [allPeakBaseline; nanmean(data_file(i).baselineFR)];
+
+end
+
+offset = 175; % window centred on ripple event; need righ offset
+a      = q_smooth(allPeak(:, (auxStruct.maxIndx-(offset - 1)):(auxStruct.maxIndx + offset)), 20, 1) - allPeakBaseline;
+b      = q_smooth(allPeakControl(:, (auxStruct.maxIndx-(offset - 1)):(auxStruct.maxIndx + offset)), 20, 1) - allPeakBaseline;
+
+[~,p, ~, t] = ttest(nanmean(a(:, auxStruct.ripple_fr_sup_roi), 2), nanmean(b(:, auxStruct.ripple_fr_sup_roi), 2))
+% 3.36, p = 9.67e-04
+
+subplot(3, 4, 6)
+figInfo = {'', '', 'Fr [Hz]', [], [], [1 2], {'Ripple', 'No ripple'}, [], {}, 24, [], []};
+plotBar([nanmean(a(:, auxStruct.ripple_fr_sup_roi), 2), nanmean(b(:, auxStruct.ripple_fr_sup_roi), 2)]*1000, figInfo, auxStruct.blueVec, auxStruct.yellowVec, curr, [0, 1], 0);  axis square
+
+h = [];
+for k = 3:4 % loop through both
+    subplot(3, 4, 4+k)
+
+    for j = 1:4
+        if k == 4
+            h{j} = plotmse(temporal_firing_supp.frTime_corrected(:, :, j) * 1000, auxStruct.areaCol(j, :), [0, 1]); hold on; axis square
+            figElements(curr, '', 'Time [msec]', 'Firing Rate_{\Delta}[Hz]', [1 141], [], [41 81 121], {'-400', 'Choice ON' '+400'}, [], {}, 24, [], [])
+        else
+            h{j} = plotmse(temporal_firing_supp.frTime(:, :, j) * 1000, auxStruct.areaCol(j, :), [0, 1]); hold on; axis square
+            figElements(curr, '', 'Time [msec]', 'Firing Rate [Hz]', [1 141], [], [41 81 121], {'-400', 'Choice ON' '+400'}, [], {}, 24, [], [])
+        end
+    end
+end
+
+
+end

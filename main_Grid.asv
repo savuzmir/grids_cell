@@ -1,0 +1,46 @@
+clc;clear;
+
+%% preliminaries
+
+% set base paths
+baseP = 'set your base path' % C:\Users\sebas\My Drive\Work\KennerleyLab\Code\Infogathering\cell_paper_revision\';
+codeP = fullfile(baseP, 'master', 'code');
+addpath(genpath(codeP));
+
+% load main aux data
+dataP          = fullfile(baseP, 'share_online\data\');    
+auxLFP         = load([dataP, 'auxLFP.mat']);            auxLFP         = auxLFP.auxLFP;
+AuxiliaryCells = load([dataP, 'AuxiliaryCells.mat']);    AuxiliaryCells = AuxiliaryCells.AuxiliaryCells;
+% load config values
+[auxStruct, chanInfo] = load_cfg_values(auxLFP, AuxiliaryCells, dataP);
+
+save('C:\Users\sebas\My Drive\Work\KennerleyLab\Code\Infogathering\cell_paper_revision\share_online\data\auxStruct', 'auxStruct', '-v7.3');
+
+%% run fig functions
+% individual functions load relevant files to create figures as needed
+% some files are relatively large so could cause loading issues depending on pc specs
+
+% generate figure 1 - behavior + value
+figure1_BehaviourValue() 
+figure1_supplements_warping() 
+
+% generate figure 2 - grid code
+figure2_lfpGrid();
+figure2_lfpGrid_supplements();
+
+% generate figure 3 - grid orientation and consistency 
+figure3_gridRealignment() 
+
+% generate figure 4 - cell-related results
+figure4_GridNeurons() 
+figure4_GridNeurons_supplements(); 
+ofc_post_revision_supplements();
+
+% generate figure 5 - 
+figure5_ripples() % save spectra
+figure5_rippleSupplements(); 
+
+
+
+
+

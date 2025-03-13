@@ -1,0 +1,931 @@
+function out = figure1_supplements(respMatFR, auxStruct)
+
+%% cpd information
+% prepare raw rasters
+allUnits        = struct;
+allUnits.trials = [];
+
+unIndx =1;
+
+for i = 1:auxStruct.num_cells
+    tmp = q_smooth(respMatFR(i).ResponseMatrix, auxStruct.windowSize, auxStruct.slideWidth); % 100 msex boxcar incremented with 10 msec
+    allUnits(unIndx).trials   = zscore(tmp);
+    allUnits(unIndx).trialsPE = zscore(nanmean(tmp(:, auxStruct.PE_roi), 2)); % 300 msec window centred on choice onset from fig 2
+    unIndx = unIndx + 1;
+end
+
+% allocate info
+cpdStats      = nan(auxStruct.num_cells, 241, auxStruct.nPerm);
+cpdStatsPE    = nan(auxStruct.num_cells, auxStruct.nPerm);
+
+% run analysis for chosen value + chosen value difference
+parfor nPerm = 1:auxStruct.nPerm
+    tic
+    tmpStats   = nan(auxStruct.num_cells, 241);
+    tmpStatsPE = nan(auxStruct.num_cells, 1);
+
+    for unit = 1:size(allUnits, 2)
+        
+        if nPerm == 1
+            Y               = allUnits(unit).trials;
+            Y_PE            = allUnits(unit).trialsPE;
+        else
+            Y               = allUnits(unit).trials;
+            Y               = Y(randperm(size(Y, 1)), :);
+            Y_PE            = allUnits(unit).trialsPE(randperm(size(Y, 1)));
+        end
+        
+        chosenVal       = [AuxiliaryCells(unit).ChEVL + AuxiliaryCells(unit).ChEVR]; 
+        unchosenVal     = [AuxiliaryCells(unit).UnEVL + AuxiliaryCells(unit).UnEVR];
+        chDiff          = chosenVal - unchosenVal;
+
+        % compute over time
+        % compute ch val 
+        dm_ch_val_diff = [ones(length(unchosenVal), 1), chDiff];
+
+        % compute ch val diff
+        [beta] = cpd(Y, dm_ch_val_diff);
+        tmpStats(unit, :, 1) = beta(2, :);
+  
+        % compute on PE
+        [beta] = cpd(Y_PE, dm_ch_val_diff);
+        tmpStatsPE(unit, 1) = beta(2);  
+            
+    end
+
+    [nPerm, toc]
+    cpdStats(:, :, nPerm)      = tmpStats;
+    cpdStatsPE(:, nPerm)       = tmpStatsPE;
+end
+
+% save stats
+cpd_supp_info = struct;
+cpd_supp_info.cpdStats   = cpdStats;
+cpd_supp_info.cpdStatePE = cpdStatsPE;
+save('D:\Data\FIL_update\cells_new\cpd_supp_info.mat', 'cpd_supp_info', '-v7.3');
+
+% generate null
+nullStatsPE = nan(auxStruct.nPerm - 1, 4);
+nullStats   = nan(auxStruct.nPerm - 1, 241, 4);
+
+trueStats   = nan(4, 241);
+trueStatsPE = nan(4, 1);
+
+for np = 2:auxStruct.nPerm
+    for br = 1:4 % 1 brain regs
+        brag = find(auxStruct.brain_region_cells == auxStruct.areaCodes(br));
+        nullStatsPE(np-1, br) = nanmean(cpdStatsPE(brag, np), 1);
+        nullStats(np-1, :, br)   = nanmean(cpdStats(brag, :, np), 1);
+    end
+end
+
+for br = 1:4
+    brag = find(auxStruct.brain_region_cells == auxStruct.areaCodes(br));
+    trueStats(br, :) = nanmean(cpdStats(brag, :, 1));
+    trueStatsPE(br)  =  nanmean(cpdStatsPE(brag, 1));
+end
+
+threshUPPE = prctile(nullStatsPE, 99, 1);
+
+nullStatsMean = squeeze(nanmean(nullStatsPE));
+nullStatsSTD  = squeeze(nanstd(nullStatsPE));
+
+zscorePE = (trueStatsPE' - nullStatsMean)./nullStatsSTD;
+normcdf(-zscorePE) % get p value
+
+cpdValues = nan(241, 4);
+
+for br = 1:length(auxStruct.relRegs)
+    currReg = find(auxStruct.brain_region_cells == auxStruct.areaCodes(br));
+    currCPD = cpdStatsPE(currReg, 1);
+    cpdValues(1:length(currReg), br) = currCPD;
+end
+
+curr = figure(6)
+
+% put in supplements
+subplot(1, 3, 1)
+% ch val diff 
+for i = 1:length(auxStruct.relRegs)
+    currReg = find(auxStruct.brain_region_cells == auxStruct.areaCodes(i));
+    
+    h(i) = plotmse(squeeze(cpdStats(currReg, :, 1))*100, auxStruct.areaCol(i, :), [0, 1]); hold on
+end
+figElements(curr, 'Chosen Value Difference', 'Time [msec]', 'CPD [%]', [1 141], [0, 2.5], [41 81 121], ...
+                {'-400', 'Choice onset', '400'}, [], {}, 14, [], []); box off
+            
+legend(h(:), 'ACC', 'DLPFC', 'OFC', 'VMPFC', 'Location', 'northwest', 'NumColumns', 2); legend box off
+
+subplot(1, 3, 2)
+b = bar(nanmean(squeeze(cpdValues)) * 100, 'edgeColor', 'none'); hold on; box off 
+b.FaceColor = 'flat';
+for j = 1:length(auxStruct.areaCol)
+    b.CData(j, :) = auxStruct.areaCol(j, :);
+end
+
+x_n = [0.5 1.5;1.5, 2.5;2.5, 3.5;3.5, 4.5];
+y_n = [threshUPPE(1)*100, threshUPPE(1)*100;threshUPPE(2)*100, threshUPPE(2)*100;threshUPPE(3)*100, threshUPPE(3)*100; threshUPPE(4)*100, threshUPPE(4)*100];
+
+for i = 1:4
+    plot(x_n(i, :), y_n(i, :), 'k', 'linewidth', 2); hold on
+end
+
+err = nanstd(squeeze(cpdValues), [], 1)./sqrt(sum(~isnan(squeeze(cpdValues)), 1));
+errorbar(1:4, nanmean(squeeze(cpdValues)) * 100, err * 100,  '.', 'CapSize', 0, 'linewidth', 2, 'color', [155/255, 155/255, 155/255])
+figElements(curr, '', '', 'CPD [%]', [], [0, 2.5], [1 2 3 4], {'ACC', 'DLPFC', 'OFC', 'VMPFC'}, [], {}, 14, [], []); 
+
+
+%% control analysis for grid orientation
+        
+% run control analysis
+grayVec = auxStruct.grayVec;
+reg = 4;
+symmetries = 6; % this will select only the sixfold symmetry for testing
+control = 1;
+[statsOrientation] = computingOrientationDistance_pap(chanInfo, auxStruct, symmetries, reg, control);
+
+trueDiff    = statsOrientation.permDiff(1, 2, 1) - statsOrientation.permDiff(1, 1, 1);
+permAvgDiff = statsOrientation.permDiff(1, 2, 2:end) - statsOrientation.permDiff(1, 1, 2:end);
+
+subplot(1, 3, 3)
+perm_histogram(squeeze(permAvgDiff), {repmat(trueDiff, [round(length(permAvgDiff)/7),  1]), 1:round((length(permAvgDiff)/7))}, {'edgecolor', 'none', 'facecolor', grayVec}, {'LineWidth', 3', 'color', 'k'}); hold on
+figElements(curr, 'More similar within stimuli sets', '(Between - Within) grid orientation difference', 'Frequency', [], [], [], ...
+    {}, [], {}, 14, [], []);
+box off
+legend('Null distribution', '(Between - Within) pairwise distance', 'Location', 'northoutside'); legend box off
+
+saveImage(curr, ['fig1_supplement_top'], 'D:\code\paper_figures\revision\', [11000, 3000])
+
+% save separately 
+
+
+%% grid warping - first fit prospect thoery model
+
+addpath('C:\Users\sebas\My Drive\Work\KennerleyLab\Code\Infogathering\prospectTheoryFitting')
+
+fittedBehaviour = struct;
+fittedBehaviour.m1 = [];
+fittedBehaviour.m2 = [];
+fittedBehaviour.m3 = [];
+
+% selected parameters
+% alpha = parameters(1); | x scale
+% gamma = parameters(2); | y scale
+% theta = parameters(3); | choice temperature
+
+alpha   = 1;
+gamma   = 1;
+theta   = 10;
+delta   = 0;
+zeta    = 0;
+
+sessionTrials = [];
+absIndex = 1;
+
+for an = 1:2
+    
+    if an == 1
+        nSessions = auxStruct.sessionsF;
+%       take the part of data of this animal
+        trialsSliced = auxStruct.unitSessions(auxStruct.unitSessions(:, 6) == 0, :);
+        
+%       we want to find IDs of the first occurence of a given session to
+%       extract the corresponding data
+        sessIndx = [];
+        for i = 1:size(nSessions, 1)
+            tmp = trialsSliced(nSessions(i) == trialsSliced(:, 2), 1);
+            sessIndx(i) = tmp(1);
+        end
+        
+    else
+        nSessions = auxStruct.sessionsM;
+        trialsSliced = auxStruct.unitSessions(auxStruct.unitSessions(:, 6) == 1, :);
+        
+%       we want to find IDs of the first occurence of a given session to
+%       extract the corresponding data
+        sessIndx = [];
+        for i = 1:size(nSessions, 1)
+            tmp = trialsSliced(nSessions(i) == trialsSliced(:, 2), 1);
+            sessIndx(i) = tmp(1);
+        end
+    end
+    
+    for sess = 1:size(nSessions, 1)
+        sessionTrials(absIndex) = size(AuxiliaryCells(sessIndx(sess)).ChML, 1);
+        
+%       mod 1: alpha, gamma, theta
+        startingParam = [alpha, gamma, theta]; % just alpha, gamma, theta
+        [param, energy] = fit_ProspectTheory1(AuxiliaryCells, sessIndx, sess, startingParam);
+        fittedBehaviour.m1(absIndex, :) = [param, energy];
+
+%       mod 2: alpha, gamma, theta, delta
+        startingParam = [alpha, gamma theta, delta]; % alpha, gamma, theta, delta
+        [param, energy] = fit_ProspectTheory2(AuxiliaryCells, sessIndx, sess, startingParam);
+        fittedBehaviour.m2(absIndex, :) = [param, energy];
+
+%       mod 3: alpha, gamma, theta, delta, zeta
+        startingParam = [alpha, gamma, theta, delta, zeta]; % alpha gamma, theta, delta, zeta
+        [param, energy] = fit_ProspectTheory3(AuxiliaryCells, sessIndx, sess, startingParam);
+        fittedBehaviour.m3(absIndex, :) = [param, energy];
+
+        absIndex = absIndex + 1;
+    end
+end
+
+
+%% compute bic 
+
+logLik = [];
+modelBIC = [];
+
+for m = 1:3
+    f = {['m', num2str(m)]};
+    nParam(m) = size(fittedBehaviour.(f{1}), 2);
+    logL = fittedBehaviour.(f{1}); logL = logL(:, end)';
+    logLik(m, :) = logL;
+    
+    modelBIC(m, :) = log(sessionTrials)*nParam(m) - 2*logL;
+end
+
+mean(modelBIC, 2)
+
+
+%% visualise behavioural warping
+
+mags  = normalize_bound(interp1(unique(auxLFP(1).ch.Left_pay)', 1:100, 'spline'), 0.15, 1.5);
+probs = normalize_bound(interp1(unique(auxLFP(1).ch.Left_prob)', 1:100, 'spline'), 0.1, 0.9);
+
+spaces = [];
+spaces_diff = [];
+mag_diff  = [];
+prob_diff = [];
+
+sub_mags_tot  = [];
+sub_probs_tot = [];
+
+for ss = 1:54
+    out = fittedBehaviour.m1(ss, 1:2);
+    tmp_orig = mags .* flip(probs');
+
+    sub_mags  = mags.^out(1);
+    sub_probs = exp(-(-log(probs)).^out(2));
+
+    tmp = sub_mags .* flip(sub_probs');
+    spaces(:,:,ss)=tmp;
+    spaces_diff(:, :, ss) = tmp_orig - tmp;
+
+    mag_diff(:, ss)  = mags - sub_mags;
+    prob_diff(:, ss) = probs - sub_probs;
+
+    sub_mags_tot(:, ss)  = sub_mags;
+    sub_probs_tot(:, ss) = sub_probs;
+end
+
+% plot 
+curr_palette = load('C:\Users\sebas\My Drive\Work\KennerleyLab\Code\util\personal\RdGy.mat');
+curr_palette = flip(curr_palette.cmap_interp);
+
+curr = figure(7)
+
+subplot(1, 8, 1:2)
+surf(nanmean(sub_mags_tot,2), flip(nanmean(sub_probs_tot, 2)), nanmean(spaces_diff, 3), 'EdgeColor', 'none'); hold on
+surf(nanmean(sub_mags_tot,2), flip(nanmean(sub_probs_tot, 2)), zeros(100, 100), 'facecolor', [0.1, 0.1, 0.1], 'FaceAlpha', .05, 'EdgeColor', 'k')
+figElements(curr, 'EV Difference', 'Magnitude', 'Probability', [0.2, 1.5], [0.1, 1], [], {}, [], {}, 24, [], []);
+zlabel('Theoretical-Empirical EV'); colorbar
+colormap(curr_palette)
+saveImage(curr, ['fig1_supplement_low_middle_1st'], 'D:\code\paper_figures\revision\', [23000, 5500])
+
+%% fit QF objectively and subjectively 
+
+ssIndx = 1;
+
+for i = 1:496
+    scalingFactorBehaviour(i, :) = fittedBehaviour.m1(ssIndx, 1:2);
+    
+    if i >= 2
+        if auxStruct.chanSessions(i, 2) ~= auxStruct.chanSessions(i + 1, 2)
+            ssIndx = ssIndx + 1;
+        end
+            
+    end
+end
+scalingFactorBehaviour(497, :) = scalingFactorBehaviour(496, :);
+
+outQF = struct;
+
+fits = {'linear', 'powerRaised'};
+
+RegContainerTest = nan(1, auxStruct.num_symm, auxStruct.crosvals, auxStruct.num_channels, 2);
+
+foo = find(auxStruct.brain_region_channels == 1 | auxStruct.brain_region_channels == 2 | auxStruct.brain_region_channels == 3 | auxStruct.brain_region_channels == 5); 
+foo = intersect(foo, find(auxStruct.nTR > 200));
+
+regressOut = 1;
+if regressOut
+    chanInfo_regOut = struct;
+    chanInfo_regOut = chanInfo;
+    for ch = 1:497
+        tmp = struct;
+        tmp(1).Y       = chanInfo(ch).Y;
+        tmp(1).Angle   = chanInfo(ch).Angle;
+        tmp(1).Aux     = chanInfo(ch).Aux;
+        tmp(1).sessRT  = chanInfo(ch).sessRT;
+    
+        out = regressOutValue(tmp, 1, auxStruct, 2); % 2 SR - 1 PE
+        
+        chanInfo_regOut(ch).Y = out;
+    end
+else
+    chanInfo_regOut = chanInfo;
+end
+
+% prepare 
+for f = 1:2
+
+    if f == 1
+        tmp = ones(auxStruct.num_channels, 2);
+    else
+        tmp = scalingFactorBehaviour;
+    end
+
+    for ch = 1:497
+        RegressorContainer = generateAngleRegressor_qf(chanInfo(ch), fits{f}, tmp(ch, :));
+        chanInfo_regOut(ch).TrialAngle = RegressorContainer.TrialAngle;
+    end
+
+    parfor fi = 1:150
+        
+        tmpTest  = nan(1, auxStruct.num_symm, auxStruct.crosvals, auxStruct.num_channels);
+    
+        for u = foo 
+            [out] = qf_single(chanInfo_regOut, u, fits{f}, fi, tmp(u, :));
+            tmpTest(:, :, :, u)  = out.RegContainerTest;
+        end
+        
+        RegContainerTest(:, :, :, :, fi, f)  = tmpTest;
+        sprintf('Done tp %i', fi)
+    end
+    sprintf('Done fit %i', fi)
+end
+
+%% now we compare whether the scaling from the behaviour-optimised grid outperforms the neural grid 
+addpath('C:\Users\sebas\OneDrive - University College London\Sebastijan\KennerleyLab\Code\MEG\util')
+
+curr = figure(7)
+originalBeta = squeeze(mean(RegContainerTest(1, :, :, :, :, 1), 3));
+fittedBeta   = squeeze(mean(RegContainerTest(1, :, :, :, :, 2), 3));
+
+original = originalBeta;
+fitted   = fittedBeta;
+
+rel_rg = [5];
+% run for all 3 
+[unique_fitted_hex, unique_orig_hex, unique_hex_diff, rel_sess] = compute_session_level_stats(auxStruct.animal, auxStruct.session, original-fitted, original, auxStruct.brain_region_channels, rel_rg, auxStruct.nTR);
+
+% get pre-computed difference 
+hex_diff_values = unique_fitted_hex;
+
+% run for all 3 
+[unique_fitted_hex, unique_orig_hex, unique_hex_diff, rel_sess] = compute_session_level_stats(auxStruct.animal, auxStruct.session, fitted, original, auxStruct.brain_region_channels, rel_rg, auxStruct.nTR);
+
+blueCol = [66, 134, 244]./255;
+redCol  = [0.6, 0.3, 0.4];
+% plot hex effect 
+subplot(1, 8, 3:5)
+a=plotmse(squeeze(unique_orig_hex(3, auxStruct.rel_sr_tp, find(rel_sess>200)))', blueCol, [0, 1]); hold on
+b=plotmse(squeeze(unique_fitted_hex(3, auxStruct.rel_sr_tp, find(rel_sess>200)))', redCol, [0, 1])
+legend([a, b], {'Objective', 'Subjective'})
+figElements(curr, 'Hexadirectional Modulation', 'Time [msec]', 'Betas [a.u.]', [1, 121], [-.08, .125], [21, 61, 101], ...
+                {'-400', 'Choice Onset', '+400'}, [], {}, 24, [], []); box off
+
+symm = 3;
+
+% there is significantly stronger veridical before and distorted after choice
+inps = [];
+inps(:, :, 1) = squeeze(hex_diff_values(symm, auxStruct.rel_sr_tp, :))';
+inps(:, :, 2) = zeros(54, 121); % cluster against 0
+nan_rw = find(isnan(inps(:, 1, 1)));
+inps(nan_rw, :, 2) = nan;
+inps(find(rel_sess<200), :, :) = nan;
+rng(07062023)
+ou = run_cluster_based_perm_test(inps, 1, 1000, 1, 95, 2);
+ou.cluster_stats
+plot(ou.cluster_stats.survived_mass_UB - 0.9, 'color', blueCol, 'linewidth', 2)
+legend([a, b], {'Objective', 'Subjective'}, 'box', 'off')
+
+% so if we look at individual plots for these regions; both the hexa plots and just comparing sixfold symm, we get:
+% ====== in vmpfc
+rel_rg = 5;
+[unique_fitted_hex, unique_orig_hex, unique_hex_diff, rel_sess] = compute_session_level_stats(auxStruct.animal, auxStruct.session, fitted, original, auxStruct.brain_region_channels, rel_rg, auxStruct.nTR);
+rel_rws = find(rel_sess > auxStruct.trialLim);
+
+confInt = [0, 0];
+subplot(1, 8, 6)
+figInfo = {'VMPFC', 'Grid-like Code', '', [], [-0.015, 0.1], [1 2], ...
+           {'Obj.', 'Subj.'}, [], {}, 24, [], []};
+[curr] = plotBar([squeeze(nanmean(unique_orig_hex(3, auxStruct.inputT, rel_rws), 2)), squeeze(nanmean(unique_fitted_hex(3, auxStruct.inputT, rel_rws), 2))], figInfo, blueCol, redCol, curr, confInt, 0); % peak neg effect (vmpfc correct)
+
+print_ttest(squeeze(nanmean(unique_orig_hex(3, auxStruct.inputT, rel_rws), 2)), 1, squeeze(nanmean(unique_fitted_hex(3, auxStruct.inputT, rel_rws), 2)))
+% 0.0253    2.5036   14.0000
+
+% ====== in acc 
+rel_rg = 3; 
+[unique_fitted_hex, unique_orig_hex, unique_hex_diff, rel_sess] = compute_session_level_stats(auxStruct.animal, auxStruct.session, fitted, original, auxStruct.brain_region_channels, rel_rg, auxStruct.nTR);
+rel_rws = find(rel_sess > 200);
+
+subplot(1, 8, 7)
+figInfo = {'ACC', 'Grid-like Code', '', [], [-0.015, 0.1], [1 2], ...
+           {'Obj.', 'Subj.'}, [], {}, 24, [], []};
+[curr] = plotBar([squeeze(nanmean(unique_orig_hex(3, auxStruct.inputT, rel_rws), 2)), squeeze(nanmean(unique_fitted_hex(3, auxStruct.inputT, rel_rws), 2))], figInfo, blueCol, redCol, curr, confInt, 0); % peak neg effect (vmpfc correct)
+% ====== in ofc
+rel_rg = 3; 
+[unique_fitted_hex, unique_orig_hex, unique_hex_diff, rel_sess] = compute_session_level_stats(auxStruct.animal, auxStruct.session, fitted, original, auxStruct.brain_region_channels, rel_rg, auxStruct.nTR);
+rel_rws = find(rel_sess > 200);
+
+% in suppls plot symmetries for peaks in both directions 
+subplot(1, 8, 8)
+figInfo = {'OFC', 'Grid-like Code', '', [], [-0.015, 0.1], [1 2], ...
+           {'Obj.', 'Subj.'}, [], {}, 24, [], []};
+[curr] = plotBar([squeeze(nanmean(unique_orig_hex(3, auxStruct.inputT, rel_rws), 2)), squeeze(nanmean(unique_fitted_hex(3, auxStruct.inputT, rel_rws), 2))], figInfo, blueCol, redCol, curr, confInt, 0); % peak neg effect (vmpfc correct)
+
+saveImage(curr, ['fig1_supplement_low_middle'], 'D:\code\paper_figures\revision\', [23000, 5500])
+
+%% subjective objective model fitting
+% fit models to behaviour
+
+
+[a,b,c,d]=ttest(modelBIC(1, :), modelBIC(2, :))
+[a,b,c,d]=ttest(modelBIC(2, :), modelBIC(3, :))
+
+
+beh_pred = [];
+neural_signal = nan(724, 1, 4);
+ss = 1;
+
+% also test vmPFC within subjective window
+load('F:\UCL\OneDrive - University College London\Sebastijan\KennerleyLab\Data\FIL_update\simultaneous_trials\cells_new\averagedFRInformation.mat');
+
+vmpfc_indx = 1;
+
+ob_estimates  = {};
+sub_estimates = {};
+sub_estimates_mag = {};
+sub_estimates_prob = {};
+stimset = [];
+choice_acc = [];
+
+for unit = 1:auxStruct.num_cells 
+
+    if unit > 1
+
+        curr_sess = auxStruct.unitSessions(unit, :);
+        if curr_sess(2) ~= prev_sess(2)
+            ss = ss + 1;
+            prev_sess = curr_sess;
+        end
+
+    else
+
+        curr_sess = auxStruct.unitSessions(unit, :);
+        prev_sess = curr_sess;
+    end
+
+    foo = fittedBehaviour.m1(ss, 1:2);
+
+    % define objective info 
+    left_val  = [AuxiliaryCells(unit).Left_pay .* AuxiliaryCells(unit).Left_prob]; 
+    right_val = [AuxiliaryCells(unit).Right_pay .* AuxiliaryCells(unit).Right_prob];
+
+    ob_estimates_lr{ss} = right_val - left_val;
+
+    chDiff   = right_val-left_val;
+    choice   = AuxiliaryCells(unit).ChML == 0; % chose right
+
+    b = glmfit(chDiff, choice, 'binomial','Link','probit');
+    beh_pred(ss, 1) = b(2);
+
+
+    % define objective info summ
+    left_val  = [AuxiliaryCells(unit).Left_pay + AuxiliaryCells(unit).Left_prob]; 
+    right_val = [AuxiliaryCells(unit).Right_pay + AuxiliaryCells(unit).Right_prob];
+
+    chDiff   = right_val-left_val;
+    choice   = AuxiliaryCells(unit).ChML == 0; % chose right
+
+    b = glmfit(chDiff, choice, 'binomial','Link','probit');
+    beh_pred(ss, 3) = b(2);
+
+    choice_acc(ss) = nanmean(((right_val > left_val) & choice == 1) | ((right_val < left_val) & choice == 0));
+    stimset(ss) = curr_sess(:, 11);
+
+    % subjective
+    left_val  = AuxiliaryCells(unit).Left_pay.^foo(1) .* exp(-(-log(AuxiliaryCells(unit).Left_prob)).^foo(2)); 
+    right_val = AuxiliaryCells(unit).Right_pay.^foo(1) .* exp(-(-log(AuxiliaryCells(unit).Right_prob)).^foo(2)); 
+    
+    chDiff  = right_val-left_val;
+    
+    sub_estimates_lr{ss} = right_val - left_val;
+
+    sub_estimates_mag{ss} = unique(AuxiliaryCells(unit).Left_pay).^foo(1);
+    sub_estimates_prob{ss}  = exp(-(-log(unique(AuxiliaryCells(unit).Left_prob))).^foo(2));
+
+    b = glmfit(chDiff, choice, 'binomial','Link','probit');
+    beh_pred(ss, 2) = b(2);
+    
+    % frontal area coding, e.g. chosen value and ch val diff 
+    chosen_value_ob  = (AuxiliaryCells(unit).ChML + AuxiliaryCells(unit).ChMR) .* (AuxiliaryCells(unit).ChPL + AuxiliaryCells(unit).ChPR);
+    chosen_value_sub = ((AuxiliaryCells(unit).ChML + AuxiliaryCells(unit).ChMR).^foo(1)) .* exp(-(-log((AuxiliaryCells(unit).ChPL + AuxiliaryCells(unit).ChPR))).^foo(2));
+    
+    ob_estimates{ss} = chosen_value_ob; 
+    sub_estimates{ss} = chosen_value_sub;
+    choice_estimates{ss} = choice;
+
+    unchosen_value_ob  = (AuxiliaryCells(unit).UnML + AuxiliaryCells(unit).UnMR) .* (AuxiliaryCells(unit).UnPL + AuxiliaryCells(unit).UnPR);
+    unchosen_value_sub = ((AuxiliaryCells(unit).UnML + AuxiliaryCells(unit).UnMR).^foo(1)) .* exp(-(-log((AuxiliaryCells(unit).UnPL + AuxiliaryCells(unit).UnPR))).^foo(2));
+        
+   rel_y_dat = allUnits(unit).trials;
+   full_dm_ob   = [ones(size(rel_y_dat, 1), 1), chosen_value_ob];
+   full_dm_sub  = [ones(size(rel_y_dat, 1), 1), chosen_value_sub];
+
+   full_dm_ob_diff  = [ones(size(rel_y_dat, 1), 1), chosen_value_ob - unchosen_value_ob];
+   full_dm_sub_diff = [ones(size(rel_y_dat, 1), 1), chosen_value_sub - unchosen_value_sub];
+
+    if auxStruct.brain_region_cells(unit) == 5
+        rel_y_dat = squeeze(averagedFRInformation(:, :, :, unit));
+        vmpfc_indx = vmpfc_indx + 1;
+
+        tmp_a = [];
+        tmp_b = [];
+
+        for fr = 1:14
+
+                curr_rel_y_dat = squeeze(rel_y_dat(fr, 1:size(full_dm_ob, 1), :));
+
+                [a]     = cpd(nanmean(curr_rel_y_dat(:, 245), 2), full_dm_ob); % test on ROIs
+                [b]     = cpd(nanmean(curr_rel_y_dat(:, 245), 2), full_dm_sub);
+                tmp_a(fr, 1, :) = a(2, :);
+                tmp_b(fr, 1, :) = b(2, :);                 
+                [a]     = cpd(nanmean(curr_rel_y_dat(:, 343), 2), full_dm_ob); % test on ROIs
+                [b]     = cpd(nanmean(curr_rel_y_dat(:, 343), 2), full_dm_sub);
+                tmp_a(fr, 2, :) = a(2, :);
+                tmp_b(fr, 2, :) = b(2, :); 
+                [a]     = cpd(nanmean(curr_rel_y_dat(:, 392), 2), full_dm_ob); % test on ROIs
+                [b]     = cpd(nanmean(curr_rel_y_dat(:, 392), 2), full_dm_sub);
+                tmp_a(fr, 3, :) = a(2, :);
+                tmp_b(fr, 3, :) = b(2, :); 
+
+                % difference
+                [a]     = cpd(nanmean(curr_rel_y_dat(:, 245), 2), full_dm_ob_diff); % test on ROIs
+                [b]     = cpd(nanmean(curr_rel_y_dat(:, 245), 2), full_dm_sub_diff);
+                tmp_a(fr, 4, :) = a(2, :);
+                tmp_b(fr, 4, :) = b(2, :);                 
+                [a]     = cpd(nanmean(curr_rel_y_dat(:, 343), 2), full_dm_ob_diff); % test on ROIs
+                [b]     = cpd(nanmean(curr_rel_y_dat(:, 343), 2), full_dm_sub_diff);
+                tmp_a(fr, 5, :) = a(2, :);
+                tmp_b(fr, 5, :) = b(2, :); 
+                [a]     = cpd(nanmean(curr_rel_y_dat(:, 392), 2), full_dm_ob_diff); % test on ROIs
+                [b]     = cpd(nanmean(curr_rel_y_dat(:, 392), 2), full_dm_sub_diff);
+                tmp_a(fr, 6, :) = a(2, :);
+                tmp_b(fr, 6, :) = b(2, :);                 
+ 
+        end
+
+        a = squeeze(nanmean(tmp_a(:, :, :), 1));
+        b = squeeze(nanmean(tmp_b(:, :, :), 1));
+
+        a_len = 6;
+
+    else
+
+        [a1]     = cpd(nanmean(rel_y_dat(:, auxStruct.inputT), 2), full_dm_ob);  a1 = a1(2, :);
+        [b1]     = cpd(nanmean(rel_y_dat(:, auxStruct.inputT), 2), full_dm_sub); b1 = b1(2, :);    
+
+        [a2]     = cpd(nanmean(rel_y_dat(:, auxStruct.inputT), 2), full_dm_ob_diff);  a2 = a2(2, :);
+        [b2]     = cpd(nanmean(rel_y_dat(:, auxStruct.inputT), 2), full_dm_sub_diff); b2 = b2(2, :);    
+
+        a = [a1;a2];
+        b = [b1;b2];
+
+        a_len  = 2;
+    end
+        neural_signal(unit, 1:a_len, 1) = a'; % objective
+        neural_signal(unit, 1:a_len, 2) = b'; % subjective
+unit
+end
+
+% choice accuracy across days
+nanmean(choice_acc(stimset==1))
+nanstd(choice_acc(stimset==1))
+length(choice_acc(stimset==1))
+
+length(choice_acc(stimset>1))
+nanmean(choice_acc(stimset>1))
+nanstd(choice_acc(stimset>1))
+
+[a,b,c,d]=ttest2(choice_acc(stimset==1), choice_acc(stimset>1))
+
+% subjective much better in behaviour
+print_ttest(beh_pred(:, 2), 1, beh_pred(:, 1))
+% 5.06977121613628e-10          7.59023681382699                        53
+[a,b,c,d]=ttest(beh_pred(:, 1), beh_pred(:, 3))
+
+orangeVec = [1.0000    0.7569    0.0275];
+purpleVec = [0.6235    0.2902    0.5882];
+
+curr = figure(7)
+subplot(1, 3, 1)
+figInfo = {'', 'EV Difference', 'Session Model Fit [beta]', ... 
+                [], [], [1, 2], {'Objective', 'Subjective'}, [], {}, 18, [], []};
+plotBar(beh_pred(:, 1:2), figInfo, orangeVec, purpleVec, curr, [0, 0], 1, 1); axis square
+
+[a,b,c,d]=ttest(beh_pred(1:29, 1), beh_pred(1:29, 2))
+[a,b,c,d]=ttest(beh_pred(30:54, 1), beh_pred(30:54, 2))
+
+% compare LR
+concat_ob     = [];
+concat_sub    = [];
+concat_sub_mag  = [];
+concat_sub_prob = [];
+
+for i = 1:54
+    [unqVals, tmp]    = unique(round(ob_estimates_lr{i}, 2));
+    unq_sub_estimates = round(sub_estimates_lr{i}, 2);
+    unq_sub_estimates = unq_sub_estimates(tmp);
+    
+    concat_ob = [concat_ob; unqVals];
+    concat_sub = [concat_sub; unq_sub_estimates];
+
+    % repeat for mag
+    unq_sub_estimates = sub_estimates_mag{i};
+    concat_sub_mag = [concat_sub_mag; unq_sub_estimates];
+
+    % repeat for prob
+    unq_sub_estimates = sub_estimates_prob{i};
+    concat_sub_prob = [concat_sub_prob; unq_sub_estimates];
+end
+
+[~, fo] = sort(concat_ob);
+
+overall_sub_sr = concat_sub(fo);
+overall_ob_sr  = concat_ob(fo);
+subplot(1, 3, 2)
+zoo = state_mean(round(abs(overall_ob_sr), 2), round(abs(overall_sub_sr), 2))
+scatter(zoo(2:end, 2), zoo(2:end, 1), 20, '', 'markerEdgeColor', 'k', 'linewidth', 2); hold on % we don't plot equal difficulty
+for i = 2:size(zoo, 1)
+    x_val = [zoo(i, 2) - zoo(i, 4), zoo(i, 2) + zoo(i, 4)];
+    y_val = [zoo(i, 1), zoo(i, 1)];
+    line(x_val, y_val, 'color', auxStruct.grayVec, 'linewidth', 3);
+end
+plot([0, .85], [0, .85], '--k')
+figElements(curr, 'EV Difference', 'Subjective', 'Objective', [0, 0.86], [0, 0.86], [], {}, [], {}, 18, [], [])
+
+nanmean(fittedBehaviour.m1, 1)
+
+% 0.735268084216325         0.619165841483499
+%mag_val_ob  = unique(AuxiliaryLFP(unit).Left_pay);
+% mag_val_sub = mag_val_ob .* 0.7704;
+
+mag_val_ob  = unique(AuxiliaryLFP(unit).Left_pay);
+[zoo] = state_mean(repmat(mag_val_ob, [54, 1]), concat_sub_mag);
+
+% inset 
+xstart=.7
+xend=.78
+ystart=.62
+yend=.70
+axes('position',[xstart ystart xend-xstart yend-ystart ])
+
+% mag separately
+scatter(zoo(:, 2), zoo(:, 1), 20, '', 'markerEdgeColor', 'k', 'linewidth', 2); hold on
+for i = 1:size(zoo, 1)
+    x_val = [zoo(i, 2) - zoo(i, 4), zoo(i, 2) + zoo(i, 4)];
+    y_val = [zoo(i, 1), zoo(i, 1)];
+    line(x_val, y_val, 'color', auxStruct.grayVec, 'linewidth', 3);
+end
+plot([0, 1], [0, 1], '--k')
+figElements(curr, 'Reward Magnitude', 'Subjective', 'Objective', [0, 1], [0, 1], [], {}, [], {}, 8, 1, 1)
+
+prob_val_ob  = unique(AuxiliaryLFP(unit).Left_prob);
+[zoo] = state_mean(repmat(prob_val_ob, [54, 1]), concat_sub_prob);
+
+xstart=.81
+xend=.89
+ystart=.62
+yend=.70
+axes('position',[xstart ystart xend-xstart yend-ystart ])
+% prob separately 
+scatter(zoo(:, 2), zoo(:, 1), 20, '', 'markerEdgeColor', 'k', 'linewidth', 2); hold on
+for i = 1:size(zoo, 1)
+    x_val = [zoo(i, 2) - zoo(i, 4), zoo(i, 2) + zoo(i, 4)];
+    y_val = [zoo(i, 1), zoo(i, 1)];
+    line(x_val, y_val, 'color', auxStruct.grayVec, 'linewidth', 3);
+end
+plot([0, 1], [0, 1], '--k')
+figElements(curr, 'Reward Probability', 'Subjective', 'Objective', [0, 1], [0, 1], [], {}, [], {}, 8, 1, 1);
+
+%% subjective / objective value code in dlpfc
+stat_info = [];
+indiv_reg = nan(300, 4);
+
+for i = 1:4
+
+    % ch val
+    if i ~= 4
+        a = squeeze(neural_signal(auxStruct.brain_region_cells == auxStruct.areaCodes(i), 1, 1));
+        b = squeeze(neural_signal(auxStruct.brain_region_cells == auxStruct.areaCodes(i), 1, 2));
+    else
+        a = squeeze(nanmean(neural_signal(auxStruct.brain_region_cells == auxStruct.areaCodes(i), 1:3, 1), 2));
+        b = squeeze(nanmean(neural_signal(auxStruct.brain_region_cells == auxStruct.areaCodes(i), 1:3, 2), 2));
+    end
+
+    indiv_reg(1:size(a, 1), i) = b - a;
+
+    [a,b,c,d]=ttest(b-a)
+    stat_info(i, :) = [d.tstat, d.df, b];
+end
+
+%          -0.25443861562117                       197         0.799422115421869
+%           3.14862779342283                       155       0.00196823809731854
+%           2.02955232876639                       194        0.0437679881921433
+%          0.798331153255466                       159         0.425869126674725
+
+subplot(1, 3, 3)
+b = bar(nanmean(indiv_reg, 1), 'edgeColor', 'none'); hold on; box off 
+b.FaceColor = 'flat';
+for j = 1:length(auxStruct.areaCol)
+    b.CData(j, :) = auxStruct.areaCol(j, :);
+end
+err = nanstd(indiv_reg, [], 1)./sqrt(sum(~isnan(indiv_reg)));
+errorbar(1:4, nanmean(indiv_reg, 1), err,  '.', 'CapSize', 0, 'linewidth', 2, 'color', [155/255, 155/255, 155/255])
+figElements(curr, 'Chosen Value_{Subj.-Obj.}', 'Brain Regions', 'CPD [%]', [], [], [1 2 3 4], {'ACC', 'DLPFC', 'OFC', 'VMPFC'}, [], {}, 18, [], [])
+
+stat_info = [];
+indiv_reg = nan(300, 4);
+
+for i = 1:4
+    % ch val diff
+    if i ~= 4
+        a = squeeze(neural_signal(auxStruct.brain_region_cells == auxStruct.areaCodes(i), 2, 1));
+        b = squeeze(neural_signal(auxStruct.brain_region_cells == auxStruct.areaCodes(i), 2, 2));
+    else
+        a = squeeze(nanmean(neural_signal(auxStruct.brain_region_cells == auxStruct.areaCodes(i), 4:6, 1), 2));
+        b = squeeze(nanmean(neural_signal(auxStruct.brain_region_cells == auxStruct.areaCodes(i), 4:6, 2), 2));
+    end
+    indiv_reg(1:size(a, 1), i) = b - a;
+
+    [a,b,c,d]=ttest(b-a)
+    stat_info(i, :) = [d.tstat, b];
+end
+
+% dlpfc ch vs. chdiff fit
+a = squeeze(neural_signal(brain_regionCells == 2, 1, 1));
+b = squeeze(neural_signal(brain_regionCells == 2, 1, 2));
+ch_dlpfc = b-a;
+
+a = squeeze(neural_signal(brain_regionCells == 2, 2, 1));
+b = squeeze(neural_signal(brain_regionCells == 2, 2, 2));
+ch_diff_dlpfc = b-a;
+
+[a,b,c,d]=ttest(ch_diff_dlpfc, ch_dlpfc);
+
+
+saveImage(curr, ['fig1_supplement_bottom_b'], 'D:\code\paper_figures\revision\', [11000, 3000])
+
+%% samples of 
+addpath(genpath('C:\Users\sebas\My Drive\Work\KennerleyLab\Code\value_space'));
+
+rate_maps_left   = nan(5, 5, 497);
+rate_maps_right  = nan(5, 5, 497);
+rate_maps_chosen = nan(5, 5, 497);
+
+for i = 1:497
+    left_mag   = discretize(chanInfo(i).Aux.Left_pay, 5);
+    right_mag  = discretize(chanInfo(i).Aux.Right_pay, 5);
+    left_prob  = discretize(chanInfo(i).Aux.Left_prob, 5);
+    right_prob = discretize(chanInfo(i).Aux.Right_prob, 5);
+    
+    chosen_mag  = discretize(chanInfo(i).Aux.ChML + chanInfo(i).Aux.ChMR, 5);
+    chosen_prob = discretize(chanInfo(i).Aux.ChPL + chanInfo(i).Aux.ChPR, 5);
+
+    rel_dat = chanInfo(i).Y;
+
+    x1 = chanInfo(i).Aux.Right_pay - chanInfo(i).Aux.Left_pay;
+    y1 = chanInfo(i).Aux.Right_prob - chanInfo(i).Aux.Left_prob;
+
+    angles = atan2(y1, x1)*180/pi;
+    [~, tmp] = sort(mod(angles, 360));
+    
+    out = regressOutValue(chanInfo, i, auxStruct, 1); % 2 SR - 1 PE
+
+    % compute rate map
+    out_left  = compute_rate_map(out, left_mag(tmp), left_prob(tmp), 0, 1, 0, 1);
+    out_right = compute_rate_map(out, right_mag(tmp), right_prob(tmp), 0, 1, 0, 1);
+    out_chosen = compute_rate_map(out, chosen_mag(tmp), chosen_prob(tmp), 0, 1, 0, 1);
+
+    rate_maps_left(:, :, i)  = out_left.rate_map_avg;
+    rate_maps_right(:, :, i) = out_right.rate_map_avg;
+    rate_maps_chosen(:, :, i) = out_chosen.rate_map_avg;
+
+    rate_maps_left_s(:, :, i)  = out_left.rate_map_sem;
+    rate_maps_right_s(:, :, i) = out_right.rate_map_sem;
+    rate_maps_chosen_s(:, :, i) = out_chosen.rate_map_sem;    
+    i
+end
+
+brain_region_channels = [];
+for i = 1:497
+    brain_region_channels(i) = auxLFP(i).ch.brain_region;
+end
+
+% construct summaries for plotting
+rate_maps_summary = [];
+
+for i = auxStruct.relRegs{4}
+
+
+    mn = rate_maps_left(:, :, i);
+    ub = mn + rate_maps_left_s(:, :, i);
+    lb = mn - rate_maps_left_s(:, :, i);
+
+    rate_maps_summary(:, :, 1, i) = mn;
+    rate_maps_summary(:, :, 2, i) = ub;
+    rate_maps_summary(:, :, 3, i) = lb;
+
+    mn = rate_maps_right(:, :, i);
+    ub = mn + rate_maps_right_s(:, :, i);
+    lb = mn - rate_maps_right_s(:, :, i);
+
+    rate_maps_summary(:, :, 4, i) = mn;
+    rate_maps_summary(:, :, 5, i) = ub;
+    rate_maps_summary(:, :, 6, i) = lb;
+
+    mn = rate_maps_chosen(:, :, i);
+    ub = mn + rate_maps_chosen_s(:, :, i);
+    lb = mn - rate_maps_chosen_s(:, :, i);
+
+    rate_maps_summary(:, :, 7, i) = mn;
+    rate_maps_summary(:, :, 8, i) = ub;
+    rate_maps_summary(:, :, 9, i) = lb;    
+end
+
+% lfp examples 
+
+cel_vec  = [ 252,  175,   234,   434,   166,   234,   232,   250,   253,   445,   449,   234,   406];
+row_vec  = {[3,5], [1,2], [1,2], [1, 4], [1,3], [3,5], [3,4], [1,2], [1:5], [1:5], [1:5], 1:5,   1:5};
+col_vec  = {[1:5], [1:5], [1:5], [1:5], [1:5], [1:5], [1:5], 1:5,   [4,5], [1,2], [3,5], [2,3], [2,4]};
+indx_vec = {[1:3], [1:3], [1:3], [4:6], [4:6], [1:3], [4:6], 1:3,   [4:6], [4:6], [4:6], 1:3,   1:3};
+label = {'Left', 'Left', 'Left', 'Right', 'Right', 'Left', 'Right', 'Left', 'Right', 'Right', 'Right', 'Left', 'Left'};
+
+corr_indx = [2, 5, 3, 4, 8, 13, 7, 11, 9];
+pinkVec_a = auxStruct.greenVec + 0.15; % pinkVec - 0.25;
+pinkVec_b = auxStruct.greenVec - 0.25; % pinkVec + 0.04;
+
+curr = figure(6)
+xvec = repmat((1:5)', [1, 1]);
+
+pic_indx = 1;
+
+for i = corr_indx
+    subplot(3, 3, pic_indx)
+    plot(1:5, repmat(0, [1, 5]), '--k'); hold on
+    cell_inf = ['ch', num2str(cel_vec(i))];
+    if i < 9
+    a=plotmseSumm(xvec, squeeze(rate_maps_summary(row_vec{i}(1), col_vec{i}, indx_vec{i}, cel_vec(i))), pinkVec_a); box off
+    b=plotmseSumm(xvec, squeeze(rate_maps_summary(row_vec{i}(2), col_vec{i}, indx_vec{i}, cel_vec(i))), pinkVec_b); box off
+    else
+    a=plotmseSumm(xvec, squeeze(rate_maps_summary(row_vec{i}, col_vec{i}(1), indx_vec{i}, cel_vec(i))), pinkVec_a); box off
+    b=plotmseSumm(xvec, squeeze(rate_maps_summary(row_vec{i}, col_vec{i}(2), indx_vec{i}, cel_vec(i))), pinkVec_b); box off; 
+    end
+    
+    if indx_vec{i}(1) ~= 1
+        ve_a = ['Prob: ' num2str(row_vec{i}(1))];
+        ve_b = ['Prob: ', num2str(row_vec{i}(2))];
+    elseif i == 8
+        ve_a = ['Mag: ' num2str(col_vec{i}(1))];
+        ve_b = ['Mag: ', num2str(col_vec{i}(2))];
+    end
+
+   legend([a, b], {ve_a, ve_b}, 'location', 'best'); legend box off 
+    
+    if pic_indx == 1 | pic_indx == 4 | pic_indx == 7
+        y_lab = 'z-score [a.u.]';
+        rm_y = [];
+    else
+        y_lab = '';
+        rm_y = 1;
+    end
+    
+    y_lab = 'z-score [a.u.]';
+    rm_y = [];
+
+    if indx_vec{i}(1) ~= 1 
+    figElements(curr, cell_inf, ['Probability_{', label{i}, '}'], y_lab, [1 5], [-1, 1.5], [1, 5], {'Min', 'Max'}, [], {}, 18, [], rm_y)
+    else
+    figElements(curr, cell_inf, ['Magnitude_{', label{i}, '}'], y_lab, [1 5], [-1, 1.5], [1, 5], {'Min', 'Max'}, [], {}, 18, [], rm_y)
+    end
+
+ pic_indx = pic_indx + 1;
+end
+
+
+saveImage(curr, ['fig1_supplement_middle'], 'D:\code\paper_figures\revision\', [10000, 6000])
